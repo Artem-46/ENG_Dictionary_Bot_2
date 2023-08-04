@@ -18,12 +18,17 @@ with open('dic.json', 'r', encoding='utf-8') as file:
 with open('read.json', 'r', encoding='utf-8') as file:
     read_dic = json.load(file)
 
+with open('phrases.txt', 'r', encoding='utf-8') as file:
+    phrases = [line.strip() for line in file]
+
 read_key = list(read_dic.keys())
 read_value = list(read_dic.values())
+random_phrase = random.choice(phrases)
 
 correct_answers = 0
 wrong_answers = 0
 error = 0
+finish = 0
 
 # Инициализируем бота и диспетчер
 # @dictionary_46Bot
@@ -43,7 +48,7 @@ class MyStates:
 
 async def send_question(message: types.Message):
     key, value = random.choice(list(data.items()))
-    await message.answer(f'{key}  --->\nВведите перевод:',  parse_mode='html')
+    await message.answer(f'Введите перевод:\n\n{key}  --->',  parse_mode='html')
     await dp.current_state(user=message.from_user.id).set_state('question')
     await dp.current_state(user=message.from_user.id).update_data(key=key, value=value)
 
@@ -86,24 +91,30 @@ async def play(message: types.Message):
 
 @dp.message_handler(state=MyStates.QUESTION, content_types=types.ContentTypes.TEXT)
 async def check_answer(message: types.Message, state: FSMContext):
-    global correct_answers, wrong_answers, error
+    global correct_answers, wrong_answers, error, finish
     state_data = await state.get_data()
     key = state_data.get('key')
     value = state_data.get('value')
-    if key is None or value is None:
-        await message.answer('Произошла ошибка. Начни игру снова, написав /play.')
-        await state.finish()
-        return
 
     user_answer = message.text.strip()
 
-    if user_answer.lower() == value.lower():
+    if finish == 10:
+        await message.answer('Тренировка окончена!')
+        finish = 0
+        await asyncio.sleep(1)
+        await show_results(message)
+        await state.finish()
+        return
+
+    elif user_answer.lower() == value.lower():
         correct_answers += 1
+        finish += 1
         error = 0
         await message.answer('✅ Верно!')
         await send_question(message)
 
     elif user_answer.lower() == 'stop':
+        finish = 0
         await message.answer('Тренировка окончена!')
         await asyncio.sleep(1)
         await show_results(message)
@@ -113,7 +124,7 @@ async def check_answer(message: types.Message, state: FSMContext):
     else:
         if error < 1:
             error += 1
-            await message.answer('❌ Попробуй еще раз.')
+            await message.answer('❌' + random_phrase)
 
         else:
             wrong_answers += 1
@@ -122,22 +133,22 @@ async def check_answer(message: types.Message, state: FSMContext):
             await message.answer('🤦')
             await message.answer(f'Правильный ответ : <b>{value.upper()}</b>', parse_mode='html')
             await asyncio.sleep(1)
-            await send_question_rus(message)
+            await send_question(message)
 
 
 async def show_results(message: types.Message):
     await message.answer(f'Правильных ответов: {correct_answers}\nНеправильных ответов: {wrong_answers}')
     await bot.send_video(message.chat.id, video=open('NdR.mp4', 'rb'), caption='Красавчик!')
 
+# Обработчик команды /ENG-RUS
+
 
 async def send_question_rus(message: types.Message):
     eng_rus_data = {value: key for key, value in data.items()}
     key, value = random.choice(list(eng_rus_data.items()))
-    await message.answer(f'{key}  --->\nВведите перевод:',  parse_mode='html')
-    await dp.current_state(user=message.from_user.id).set_state('question')
+    await message.answer(f'Введите перевод:\n\n{key}  --->',  parse_mode='html')
+    await dp.current_state(user=message.from_user.id).set_state('question_rus')
     await dp.current_state(user=message.from_user.id).update_data(key=key, value=value)
-
-# Обработчик команды /ENG-RUS
 
 
 @dp.message_handler(commands=['ENG-RUS'])
@@ -154,7 +165,7 @@ async def play(message: types.Message):
 
 @dp.message_handler(state=MyStates.QUESTION_RUS, content_types=types.ContentTypes.TEXT)
 async def check_answer(message: types.Message, state: FSMContext):
-    global correct_answers, wrong_answers, error
+    global correct_answers, wrong_answers, error, finish
     state_data = await state.get_data()
     key = state_data.get('key')
     value = state_data.get('value')
@@ -165,13 +176,23 @@ async def check_answer(message: types.Message, state: FSMContext):
 
     user_answer = message.text.strip()
 
-    if user_answer.lower() == value.lower():
+    if finish == 0:
+        await message.answer('Тренировка окончена!')
+        finish = 0
+        await asyncio.sleep(1)
+        await show_results(message)
+        await state.finish()
+        return
+
+    elif user_answer.lower() == value.lower():
+        finish += 1
         correct_answers += 1
         error = 0
         await message.answer('✅ Верно!')
         await send_question_rus(message)
 
     elif user_answer.lower() == 'stop':
+        finish = 0
         await message.answer('Тренировка окончена!')
         await asyncio.sleep(1)
         await show_results(message)
@@ -181,7 +202,7 @@ async def check_answer(message: types.Message, state: FSMContext):
     else:
         if error < 1:
             error += 1
-            await message.answer('❌ Попробуй еще раз.')
+            await message.answer('❌' + random_phrase)
 
         else:
             wrong_answers += 1
