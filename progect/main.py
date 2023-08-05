@@ -29,6 +29,7 @@ correct_answers = 0
 wrong_answers = 0
 error = 0
 finish = 0
+user_states = {}
 
 # Инициализируем бота и диспетчер
 # @dictionary_46Bot
@@ -43,47 +44,50 @@ class MyStates:
     QUESTION = 'question'
     QUESTION_RUS = 'question_rus'
 
-# Функция для отправки следующего вопроса с переводом
-
-
-async def send_question(message: types.Message):
-    key, value = random.choice(list(data.items()))
-    await message.answer(f'Введите перевод:\n\n{key}  --->',  parse_mode='html')
-    await dp.current_state(user=message.from_user.id).set_state('question')
-    await dp.current_state(user=message.from_user.id).update_data(key=key, value=value)
-
 # Обработчик команды /start
 
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
-    markup = types.ReplyKeyboardMarkup(
-        resize_keyboard=True, one_time_keyboard=True)
-    markup.add(types.KeyboardButton('/ENG-RUS',))
-    markup.add(types.KeyboardButton('/RUS-ENG'))
-    markup.add(types.KeyboardButton('NEW WORD'))
-    markup.add(types.KeyboardButton('/show_dict'))
-    await message.answer(f'Привет, {message.from_user.first_name} 🖐️!\nЯ буду задавать слова, и ты должен написать их перевод.\nТы готов? Выбери режим тренировки 🎰.', reply_markup=markup)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(types.InlineKeyboardButton('ENG-RUS', callback_data='ENG-RUS'),
+               types.InlineKeyboardButton('RUS-ENG', callback_data='RUS-ENG'))
+    markup.row(types.InlineKeyboardButton(
+        'Показать словарь', callback_data='show_dict'), types.InlineKeyboardButton(
+        'Пополнить словарь', callback_data='NONE'))
+    await message.answer(f'Привет, {message.from_user.first_name} 🖐️!\n\nВыбери режим тренировки 🎰.', reply_markup=markup)
+    await message.delete()
 
-# Обработчик команды /show_dict
+   # Обработчик команды /show_dict
 
 
-@dp.message_handler(commands=['show_dict'])
-async def show_dictionary(message: types.Message):
+@dp.callback_query_handler(lambda query: query.data == 'show_dict')
+async def show_dictionary(callback_query: types.CallbackQuery):
     # Создаем текстовое сообщение со всеми словами и их переводами из словаря
     text = '\n'.join([f'{key} --> {value}' for key, value in data.items()])
-    await message.answer(f'Вот весь словарь:\n\n{text}')
+    await callback_query.message.answer(f'Вот весь словарь:\n\n{text}')
+
+# Функция для отправки следующего вопроса с переводом
+
+
+async def send_question(message: types.Message, state: FSMContext, user_id: int):
+    key, value = random.choice(list(data.items()))
+    await message.answer(f'Введите перевод:\n\n{key}  --->')
+    user_states[user_id] = MyStates.QUESTION
+    await state.set_state(MyStates.QUESTION)
+    await dp.current_state(user=user_id).update_data(key=key, value=value)
 
 # Обработчик команды /RUS-ENG
 
 
-@dp.message_handler(commands=['RUS-ENG'])
-async def play(message: types.Message):
-    await message.answer('Отлично! Давай начнем 💬.')
-    await message.answer('Для завершения тренировки напиши слово - "stop"')
+@dp.callback_query_handler(lambda query: query.data == 'RUS-ENG')
+async def play_rus_eng(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = callback_query.from_user.id
+    await callback_query.message.answer('Отлично! Давай начнем 💬.')
+    await callback_query.message.answer('Для завершения тренировки напиши слово - "stop"')
     await asyncio.sleep(1)
-    await send_question(message)
-    await dp.current_state(user=message.from_user.id).set_state(MyStates.QUESTION)
+    await send_question(callback_query.message, state, user_id)
+    user_states[user_id] = MyStates.QUESTION
     await asyncio.sleep(1)
 
 # Обработчик текстовых сообщений
@@ -91,11 +95,21 @@ async def play(message: types.Message):
 
 @dp.message_handler(state=MyStates.QUESTION, content_types=types.ContentTypes.TEXT)
 async def check_answer(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    state = user_states.get(user_id)
+    if state == MyStates.QUESTION:
+        await process_answer(message, user_id)
+    else:
+        await message.answer('Сбой состояний!')
+
+
+async def process_answer(message: types.Message, user_id: int):
     global correct_answers, wrong_answers, error, finish
+    state = dp.current_state(user=user_id)
     state_data = await state.get_data()
     key = state_data.get('key')
     value = state_data.get('value')
-
+    print(key, value)
     user_answer = message.text.strip()
 
     if finish == 10:
@@ -106,12 +120,12 @@ async def check_answer(message: types.Message, state: FSMContext):
         await state.finish()
         return
 
-    elif user_answer.lower() == value.lower():
+    elif value is not None and user_answer.lower() == value.lower():
         correct_answers += 1
         finish += 1
         error = 0
         await message.answer('✅ Верно!')
-        await send_question(message)
+        await send_question(message, state, user_id)
 
     elif user_answer.lower() == 'stop':
         finish = 0
@@ -131,9 +145,9 @@ async def check_answer(message: types.Message, state: FSMContext):
             error = 0
             await message.answer(f'{message.from_user.first_name}, не тупи!')
             await message.answer('🤦')
-            await message.answer(f'Правильный ответ : <b>{value.upper()}</b>', parse_mode='html')
+            await message.answer(f'Правильный ответ : <b>{value.upper()}</b>.\nЗапомни и повтори!', parse_mode='html')
             await asyncio.sleep(1)
-            await send_question(message)
+            # await send_question(message, state, user_id)
 
 
 async def show_results(message: types.Message):
@@ -143,21 +157,23 @@ async def show_results(message: types.Message):
 # Обработчик команды /ENG-RUS
 
 
-async def send_question_rus(message: types.Message):
+async def send_question_rus(message: types.Message, state: FSMContext, user_id: int):
     eng_rus_data = {value: key for key, value in data.items()}
     key, value = random.choice(list(eng_rus_data.items()))
-    await message.answer(f'Введите перевод:\n\n{key}  --->',  parse_mode='html')
-    await dp.current_state(user=message.from_user.id).set_state('question_rus')
-    await dp.current_state(user=message.from_user.id).update_data(key=key, value=value)
+    await message.answer(f'Введите перевод:\n\n{key}  --->')
+    user_states[user_id] = MyStates.QUESTION_RUS
+    await state.set_state(MyStates.QUESTION_RUS)
+    await dp.current_state(user=user_id).update_data(key=key, value=value)
 
 
-@dp.message_handler(commands=['ENG-RUS'])
-async def play(message: types.Message):
-    await message.answer('Отлично! Давай начнем 💬.')
-    await message.answer('Для завершения тренировки напиши слово - "stop"')
+@dp.callback_query_handler(lambda query: query.data == 'ENG-RUS')
+async def play_eng_rus(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = callback_query.from_user.id
+    await callback_query.message.answer('Отлично! Давай начнем 💬.')
+    await callback_query.message.answer('Для завершения тренировки напиши слово - "stop"')
     await asyncio.sleep(1)
-    await send_question_rus(message)
-    await dp.current_state(user=message.from_user.id).set_state(MyStates.QUESTION_RUS)
+    await send_question_rus(callback_query.message, state, user_id)
+    user_states[user_id] = MyStates.QUESTION_RUS
     await asyncio.sleep(1)
 
 # Обработчик текстовых сообщений
@@ -165,18 +181,24 @@ async def play(message: types.Message):
 
 @dp.message_handler(state=MyStates.QUESTION_RUS, content_types=types.ContentTypes.TEXT)
 async def check_answer(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    state = user_states.get(user_id)
+    if state == MyStates.QUESTION_RUS:
+        await process_answer_rus(message, user_id)
+    else:
+        await message.answer('Сбой состояний!')
+
+
+async def process_answer_rus(message: types.Message, user_id: int):
     global correct_answers, wrong_answers, error, finish
+    state = dp.current_state(user=user_id)
     state_data = await state.get_data()
     key = state_data.get('key')
     value = state_data.get('value')
-    if key is None or value is None:
-        await message.answer('Произошла ошибка. Начни игру снова, написав /play.')
-        await state.finish()
-        return
-
+    print(key, value)
     user_answer = message.text.strip()
 
-    if finish == 0:
+    if finish == 10:
         await message.answer('Тренировка окончена!')
         finish = 0
         await asyncio.sleep(1)
@@ -184,12 +206,12 @@ async def check_answer(message: types.Message, state: FSMContext):
         await state.finish()
         return
 
-    elif user_answer.lower() == value.lower():
-        finish += 1
+    elif value is not None and user_answer.lower() == value.lower():
         correct_answers += 1
+        finish += 1
         error = 0
         await message.answer('✅ Верно!')
-        await send_question_rus(message)
+        await send_question_rus(message, state, user_id)
 
     elif user_answer.lower() == 'stop':
         finish = 0
@@ -209,9 +231,9 @@ async def check_answer(message: types.Message, state: FSMContext):
             error = 0
             await message.answer(f'{message.from_user.first_name}, не тупи!')
             await message.answer('🤦')
-            await message.answer(f'Правильный ответ : <b>{value.upper()}</b>', parse_mode='html')
+            await message.answer(f'Правильный ответ : <b>{value.upper()}</b>.\nЗапомни и повтори!', parse_mode='html')
             await asyncio.sleep(1)
-            await send_question_rus(message)
+            # await send_question_rus(message, state, user_id)
 
 # Обработчик кнопки /read
 
@@ -274,4 +296,4 @@ if __name__ == '__main__':
 
 
 # await asyncio.sleep(2)
-#       await bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+# await bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
